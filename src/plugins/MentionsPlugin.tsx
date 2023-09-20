@@ -9,7 +9,6 @@ import { TextNode } from 'lexical';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { $createMentionNode } from '../nodes/MentionNode';
 import { $createAutoLinkNode } from '@lexical/link';
 
@@ -17,26 +16,10 @@ import './MentionsPlugin.css';
 
 type SearchData<A> = (p: string) => Promise<A[]>;
 
-type OffsetCard = {
-  leftOffset: number;
-  topOffset: number;
-};
-
-type PopoverCard<A> = {
-  card: (data: A) => JSX.Element;
-  offset: OffsetCard;
-};
-
-type UserCard = {
-  card: JSX.Element;
-  offset: OffsetCard;
-};
-
 type GetTypeaheadValues<A> = (result: A) => {
   url: string;
   value: string;
   picture: JSX.Element;
-  popoverCard?: PopoverCard<A>;
 };
 
 const PUNCTUATION =
@@ -47,10 +30,6 @@ const DocumentMentionsRegex = {
   NAME,
   PUNCTUATION,
 };
-
-const CapitalizedNameMentionsRegex = new RegExp(
-  '(^|[^#])((?:' + DocumentMentionsRegex.NAME + '{' + 1 + ',})$)'
-);
 
 const PUNC = DocumentMentionsRegex.PUNCTUATION;
 
@@ -140,28 +119,6 @@ function useMentionLookupService<A>(
   return results;
 }
 
-function checkForCapitalizedNameMentions(
-  text: string,
-  minMatchLength: number
-): MenuTextMatch | null {
-  const match = CapitalizedNameMentionsRegex.exec(text);
-  if (match !== null) {
-    // The strategy ignores leading whitespace but we need to know it's
-    // length to add it to the leadOffset
-    const maybeLeadingWhitespace = match[1];
-
-    const matchingString = match[2];
-    if (matchingString != null && matchingString.length >= minMatchLength) {
-      return {
-        leadOffset: match.index + maybeLeadingWhitespace.length,
-        matchingString,
-        replaceableString: matchingString,
-      };
-    }
-  }
-  return null;
-}
-
 function checkForAtSignMentions(
   text: string,
   minMatchLength: number
@@ -189,27 +146,19 @@ function checkForAtSignMentions(
 }
 
 function getPossibleMenuTextMatch(text: string): MenuTextMatch | null {
-  const match = checkForAtSignMentions(text, 1);
-  return match === null ? checkForCapitalizedNameMentions(text, 3) : match;
+  return checkForAtSignMentions(text, 1);
 }
 
 class MentionMenuOption extends MenuOption {
   name: string;
   picture: JSX.Element;
   url: string;
-  userCard: UserCard;
 
-  constructor(
-    name: string,
-    picture: JSX.Element,
-    url?: string,
-    userCard?: UserCard
-  ) {
+  constructor(name: string, picture: JSX.Element, url?: string) {
     super(name);
     this.name = name;
     this.picture = picture;
     this.url = url;
-    this.userCard = userCard;
   }
 }
 
@@ -272,16 +221,7 @@ export default function MentionsPlugin<A>(props: {
             new MentionMenuOption(
               getTypeaheadValues(result).value,
               getTypeaheadValues(result).picture,
-              getTypeaheadValues(result).url,
-              {
-                card: getTypeaheadValues(result).popoverCard.card(result),
-                offset: {
-                  leftOffset:
-                    getTypeaheadValues(result).popoverCard.offset.leftOffset,
-                  topOffset:
-                    getTypeaheadValues(result).popoverCard.offset.topOffset,
-                },
-              }
+              getTypeaheadValues(result).url
             )
         )
         .slice(0, SUGGESTION_LIST_LENGTH_LIMIT),
@@ -296,21 +236,11 @@ export default function MentionsPlugin<A>(props: {
     ) => {
       editor.update(() => {
         if (nodeToReplace) {
-          const popover = document.createElement('div');
-          const staticElement = renderToStaticMarkup(
-            selectedOption.userCard.card
-          );
-          popover.innerHTML = staticElement;
-
-          const mentionNode = $createMentionNode(`@${selectedOption.name}`, {
-            card: popover,
-            leftOffset: selectedOption.userCard.offset.leftOffset,
-            topOffset: selectedOption.userCard.offset.topOffset,
-          });
-          const linkNode = $createAutoLinkNode(selectedOption.url);
-          linkNode.append(mentionNode);
-          nodeToReplace.replace(linkNode);
-          linkNode.select();
+          const mentionNode = $createMentionNode(`@${selectedOption.name}`);
+          // const linkNode = $createAutoLinkNode(selectedOption.url);
+          // linkNode.append(mentionNode);
+          nodeToReplace.replace(mentionNode);
+          mentionNode.select();
         }
         closeMenu();
       });
@@ -320,9 +250,11 @@ export default function MentionsPlugin<A>(props: {
 
   const checkForMentionMatch = useCallback(
     (text: string) => {
-      const mentionMatch = getPossibleMenuTextMatch(text);
       const slashMatch = checkForSlashTriggerMatch(text, editor);
-      return !slashMatch && mentionMatch ? mentionMatch : null;
+      if (slashMatch !== null) {
+        return null;
+      }
+      return getPossibleMenuTextMatch(text);
     },
     [checkForSlashTriggerMatch, editor]
   );
